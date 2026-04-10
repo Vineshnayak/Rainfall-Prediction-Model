@@ -8,6 +8,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, mean_absolute_error, classification_report
+import requests
+import shap
 
 # Load dataset
 df = pd.read_csv("TrainingDatasetRainFallPrediction.csv")
@@ -117,7 +119,7 @@ flood_report = classification_report_to_df({'y_true': y_test_flood, 'y_pred': fl
 agri_report = classification_report_to_df({'y_true': y_test_agri, 'y_pred': agriculture_model.predict(X_test_ar)})
 
 # Streamlit UI
-st.title("Weather & Agriculture Prediction Model")
+st.title("Rainfall Prediction Model")
 
 st.subheader("Classification Reports")
 
@@ -137,13 +139,40 @@ with tab3:
     st.dataframe(agri_report.style.format("{:.2f}"))
 
 # Prediction based on input
-# Sidebar for user input
 st.sidebar.header("Enter Weather Details")
-temp = st.sidebar.number_input("Temperature (C)", min_value=-10.0, max_value=50.0, value=25.0)
-humidity = st.sidebar.number_input("Humidity (%)", min_value=0.0, max_value=100.0, value=50.0)
-wind_speed = st.sidebar.number_input("Wind Speed (km/h)", min_value=0.0, max_value=150.0, value=10.0)
-pressure = st.sidebar.number_input("Pressure (hPa)", min_value=900.0, max_value=1100.0, value=1010.0)
-cloud_cover = st.sidebar.number_input("Cloud Cover (%)", min_value=0.0, max_value=100.0, value=50.0)
+input_method = st.sidebar.radio("Choose Input Type:", ("Manual Entry", "Live OpenWeather API"))
+
+if input_method == "Live OpenWeather API":
+    api_key = st.sidebar.text_input("Enter OpenWeather API Key", type="password")
+    city = st.sidebar.text_input("Enter City Name")
+    
+    # We initialize variables with defaults just in case
+    temp, humidity, wind_speed, pressure, cloud_cover = 25.0, 50.0, 10.0, 1010.0, 50.0
+    
+    if st.sidebar.button("Fetch Live Weather") and api_key and city:
+        url = f"https://api.openweathermap.org/data/2.5/weather?q={city.strip()}&appid={api_key.strip()}&units=metric"
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            temp = data['main']['temp']
+            humidity = data['main']['humidity']
+            wind_speed = data['wind']['speed'] * 3.6 
+            pressure = data['main']['pressure']
+            cloud_cover = data['clouds']['all']
+            st.sidebar.success(f"Weather fetched for {city}!")
+        elif response.status_code == 401:
+            st.sidebar.error("Error 401: Invalid API Key. Please check your OpenWeather API Key.")
+        elif response.status_code == 404:
+            st.sidebar.error(f"Error 404: City '{city}' not found.")
+        else:
+            st.sidebar.error(f"Failed to fetch. OpenWeather explicitly returned: {response.status_code} - {response.text}")
+else:
+    # Manual Fallback / Sliders
+    temp = st.sidebar.number_input("Temperature (C)", min_value=-10.0, max_value=50.0, value=25.0)
+    humidity = st.sidebar.number_input("Humidity (%)", min_value=0.0, max_value=100.0, value=50.0)
+    wind_speed = st.sidebar.number_input("Wind Speed (km/h)", min_value=0.0, max_value=150.0, value=10.0)
+    pressure = st.sidebar.number_input("Pressure (hPa)", min_value=900.0, max_value=1100.0, value=1010.0)
+    cloud_cover = st.sidebar.number_input("Cloud Cover (%)", min_value=0.0, max_value=100.0, value=50.0)
 
 
 
@@ -173,6 +202,28 @@ if st.sidebar.button("Predict"):
     st.write(f"**Predicted Rainfall Intensity:** {rainfall_intensity_pred:.2f} mm/hr")
     st.write(f"**Flood Occurrence:** {'Likely' if flood_pred == 1 else 'Unlikely'}")
     st.write(f"**Agriculture Suitability:** {'Suitable' if agriculture_pred == 1 else 'Not Suitable'}")
+    # 🚨 Alert System (Flood Warning)
+    if flood_prob >= 0.7:
+        st.error("🚨 **CRITICAL ALERT: High Risk of Flooding Detected (Probability: {:.1%})!** Ensure safety protocols are in place.".format(flood_prob))
+    elif flood_prob >= 0.4:
+        st.warning("⚠️ **Warning: Moderate Flood Risk Detected (Probability: {:.1%}).** Monitor weather conditions.".format(flood_prob))
+    else:
+        st.success("✅ **Flood Risk: Low.**")
+
+    # 🌾 Crop Recommendations
+    def recommend_crop(t, h):
+        if t > 25 and h > 70:
+            return "🌾 Rice, Sugarcane (Requires high heat and moisture)"
+        elif 15 <= t <= 25 and h > 50:
+            return "🌽 Wheat, Maize (Requires moderate conditions)"
+        elif t > 30 and h < 50:
+            return "🥜 Cotton, Millet (Drought resistant)"
+        else:
+            return "🥕 Root vegetables, Pulses"
+
+    if agriculture_pred == 1:
+        recommended_crops = recommend_crop(temp, humidity)
+        st.info(f"💡 **Recommended Crops for these conditions:** {recommended_crops}")
 
     # Prediction Probability Bar Chart
     st.subheader("Weather Prediction Probability")
@@ -181,6 +232,20 @@ if st.sidebar.button("Predict"):
     ax.set_ylim(0, 1)
     ax.set_ylabel("Probability")
     st.pyplot(fig)
+
+    st.subheader("🧠 Explainable AI: Feature Importance in Flood Prediction")
+
+    # Create a container for the explanation
+    with st.expander("Why did we get this Flood Prediction? (Click to Expand)", expanded=True):
+        explainer = shap.TreeExplainer(flood_model)
+        shap_values = explainer.shap_values(input_data)
+        
+        # Depending on SHAP version, this could be a list or array
+        shap_values_to_plot = shap_values[1] if isinstance(shap_values, list) else shap_values
+
+        fig_shap, ax_shap = plt.subplots(figsize=(6, 4))
+        shap.summary_plot(shap_values_to_plot, input_data, feature_names=features, plot_type="bar", show=False)
+        st.pyplot(fig_shap)
 
     # Save to CSV
     new_data = pd.DataFrame([{

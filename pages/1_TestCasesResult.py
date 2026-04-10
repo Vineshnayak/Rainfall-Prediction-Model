@@ -26,7 +26,6 @@ y_agriculture = (train_df["Agriculture Suitability Rate"] > 0.7).astype(int)  # 
 # Train models
 rain_model = LogisticRegression()
 rain_model.fit(X_train, y_rain)
-
 flood_model = RandomForestClassifier(n_estimators=100)
 flood_model.fit(X_train, y_flood)
 
